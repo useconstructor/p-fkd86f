@@ -1,0 +1,13 @@
+{
+  "primaryColor": "#F5F7F2",
+  "secondaryColor": "#FFFFFF",
+  "backgroundColor": "#F5F7F2",
+  "textColor": "#203A32",
+  "accentColor": "#287454",
+  "fontHeading": "Source Sans 3",
+  "fontBody": "IBM Plex Mono",
+  "borderRadius": "0.25rem",
+  "logoText": "Gastos Personales Mensuales",
+  "logoImageUrl": null,
+  "tone": "trustworthy"
+}

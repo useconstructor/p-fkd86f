@@ -1,33 +1,42 @@
 @import "tailwindcss";
-
+@import "@fontsource/source-sans-3/400.css";
+@import "@fontsource/source-sans-3/500.css";
+@import "@fontsource/source-sans-3/600.css";
+@import "@fontsource/source-sans-3/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 @theme {
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-  --color-background: oklch(1 0 0);
-  --color-foreground: oklch(0.145 0 0);
-  --color-card: oklch(1 0 0);
-  --color-card-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.205 0 0);
-  --color-primary-foreground: oklch(0.985 0 0);
-  --color-secondary: oklch(0.97 0 0);
-  --color-secondary-foreground: oklch(0.205 0 0);
-  --color-muted: oklch(0.97 0 0);
-  --color-muted-foreground: oklch(0.556 0 0);
-  --color-accent: oklch(0.97 0 0);
-  --color-accent-foreground: oklch(0.205 0 0);
-  --color-destructive: oklch(0.577 0.245 27.325);
-  --color-border: oklch(0.922 0 0);
-  --color-input: oklch(0.922 0 0);
-  --color-ring: oklch(0.708 0 0);
-  --radius: 0.5rem;
+ --font-sans: 'Source Sans 3', sans-serif;
+ --font-mono: 'IBM Plex Mono', monospace;
+ --color-background: #F5F7F2;
+ --color-foreground: #203A32;
+ --color-card: #FFFFFF;
+ --color-card-foreground: #203A32;
+ --color-primary: #287454;
+ --color-primary-foreground: #FFFFFF;
+ --color-secondary: #FFFFFF;
+ --color-secondary-foreground: #203A32;
+ --color-muted: #EAF0E7;
+ --color-muted-foreground: #607068;
+ --color-accent: #EAF0E7;
+ --color-accent-foreground: #203A32;
+ --color-marker: #E6C34A;
+ --color-destructive: #B63843;
+ --color-destructive-foreground: #FFFFFF;
+ --color-border: #D9E0D5;
+ --color-input: #CCD6CC;
+ --color-ring: #287454;
+ --radius: 0.25rem;
 }
-
 @layer base {
-  * {
-    border-color: var(--color-border);
-  }
-  body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
-  }
+ * {border-color:var(--color-border)}
+ body {background:var(--color-background);color:var(--color-foreground);font-family:var(--font-sans);font-size:16px}
+ button, input, select, textarea {font:inherit}
+ button {cursor:pointer}
+ button:disabled {cursor:default}
+ :focus-visible {outline:2px solid var(--color-ring);outline-offset:3px}
+ ::selection {background:#E6C34A;color:#203A32}
 }
+@keyframes panel-in {from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@utility panel-enter {animation:panel-in 180ms ease-out}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

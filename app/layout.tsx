@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "App",
-  description: "Built by Constructor",
+  title: "Gastos Personales Mensuales",
+  description: "Tu libreta personal de gastos. Registra y consulta tu distribución mensual por categorías.",
 };
 
 export default function RootLayout({

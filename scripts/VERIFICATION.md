@@ -1,0 +1,5 @@
+Run `npm run build`, then start the production server with `npm run start -- -p 3100`. In another terminal, run `npm run verify` with the provided `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` environment variables. `BASE_URL` may override the server URL; `EVIDENCE_DIR` may override `/tmp/constructor-quality`.
+
+The exported `verify({browser, baseUrl, evidenceDir})` function is also available to an independent Playwright runner. Checks use real HTTP handlers and the provided Turso database. Labelled QA records are created in fresh isolated workspaces, and only those workspaces are cleaned up afterward. Existing records are compared and preserved. Screenshots and the assertion receipt are saved in the evidence directory.
+
+Production integration remains pending until HTTPS direct access and the actual cross-site Constructor iframe are available. Verify the `__Host-gastos` cookie has HttpOnly, Secure, SameSite=None, Partitioned, Path=/ and no Domain; verify initialization reuses the session, persisted mutations survive reloads in both contexts, and blocked cookies show the recovery message. Local HTTP checks cannot demonstrate cross-site HTTPS behavior.
