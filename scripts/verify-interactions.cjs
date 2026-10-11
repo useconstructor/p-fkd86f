@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {createHash} = require('node:crypto');
-const {createClient} = require('@libsql/client');
+const {createRequire} = require('node:module');
+const appRequire = createRequire('/tmp/app/package.json');
+const {createClient} = appRequire('@libsql/client');
 
 exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
   if(evidenceDir) await fs.mkdir(evidenceDir,{recursive:true});
@@ -51,7 +53,33 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     await onboarding.goto(baseUrl);
     const onboardingDialog=onboarding.getByRole('dialog');
     await onboarding.getByRole('heading',{name:'Primero, elige tu moneda',exact:true}).waitFor();
-    await onboarding.keyboard.press('Escape'); assert(await onboardingDialog.isVisible());
+    const assertOverlay = async page => {
+      const geometry=await page.locator('[data-modal-overlay]').evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,position:getComputedStyle(el).position}});
+      assert.equal(geometry.position,'fixed'); assert(Math.abs(geometry.x)<1 && Math.abs(geometry.y)<1);
+      assert(Math.abs(geometry.width-geometry.viewportWidth)<1 && Math.abs(geometry.height-geometry.viewportHeight)<1,JSON.stringify(geometry));
+    };
+    await assertOverlay(onboarding);
+    if(evidenceDir)await onboarding.screenshot({path:path.join(evidenceDir,'currency-onboarding-desktop.png'),fullPage:false});
+    await onboarding.keyboard.press('Escape'); await onboardingDialog.waitFor({state:'hidden'});
+    assert.equal((await (await send(warm,'settings')).json()).currency,null);
+    await onboarding.getByRole('button',{name:'Elegir moneda',exact:true}).last().click();
+    await onboardingDialog.waitFor(); await onboarding.getByRole('button',{name:'Explorar primero',exact:true}).click();
+    await onboardingDialog.waitFor({state:'hidden'});
+    await onboarding.getByRole('button',{name:'Añadir gasto',exact:true}).first().click(); await onboardingDialog.waitFor();
+    await onboarding.getByRole('button',{name:'Cerrar panel',exact:true}).click(); await onboardingDialog.waitFor({state:'hidden'});
+    const unsetToken=(await (await send(warm,'session')).json()).csrf;
+    const unsetCategory=(await (await send(warm,'categories')).json())[0].id;
+    const unsetExpense={concept:'QA · Bloqueado sin moneda',amount:'1',date:'2026-10-11',category_id:unsetCategory,note:''};
+    for(const [resource,method] of [['expenses','POST'],['expenses/nonexistent','PATCH'],['expenses/nonexistent','DELETE']]) {
+      assert([404,409].includes((await send(warm,resource,method,method==='DELETE'?undefined:unsetExpense,unsetToken)).status()));
+    }
+    assert.equal((await (await send(warm,'expenses?month=2026-10')).json()).length,0);
+    await onboarding.reload(); await onboardingDialog.waitFor();
+    await onboarding.setViewportSize({width:320,height:740}); await assertOverlay(onboarding); await onboarding.waitForTimeout(220);
+    if(evidenceDir)await onboarding.screenshot({path:path.join(evidenceDir,'currency-onboarding-320.png'),fullPage:false});
+    await onboarding.getByRole('button',{name:'Explorar primero',exact:true}).click(); await onboardingDialog.waitFor({state:'hidden'});
+    if(evidenceDir)await onboarding.screenshot({path:path.join(evidenceDir,'explore-empty-320.png'),fullPage:true});
+    await onboarding.getByRole('button',{name:'Elegir moneda',exact:true}).last().click(); await onboardingDialog.waitFor();
     await onboarding.getByLabel('Moneda',{exact:true}).selectOption('EUR');
     await onboarding.getByRole('button',{name:'Continuar y añadir gasto',exact:true}).click();
     await onboarding.getByRole('heading',{name:'Añadir gasto',exact:true}).waitFor();
@@ -60,7 +88,7 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     await onboarding.getByRole('heading',{name:'Tu registro',exact:true}).waitFor();
     assert.equal((await (await send(warm,'settings')).json()).currency,'EUR');
     assert.equal((await (await send(warm,'expenses?month=2026-10')).json()).length,0);
-    passed('First-use currency choice stays open until selected, persists after reload, and cancelling the expense writes no record');
+    passed('Onboarding dismisses by Escape, close and Explorar primero; empty dashboard restores choice, mutation requires currency, selection persists after reload');
     await onboarding.close();
     baseline = await snapshot(); const before = await counts();
     const simultaneous = await Promise.all(Array.from({length:3},()=>newContext()));
@@ -95,13 +123,14 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     passed('Real expense handler rejects invalid concept, precision, amount, date and category without writes');
     const page=await context.newPage(); const browserErrors=[]; page.on('pageerror',e=>browserErrors.push(e.message));
     await page.goto(baseUrl); await page.getByRole('heading',{name:'Tu registro',exact:true}).waitFor();
-    await page.locator('input[type="month"]').fill('2026-10');
+    await page.getByLabel('Mes y año',{exact:true}).fill('2026-10');
     await page.locator('[aria-busy="true"]').waitFor({state:'hidden'});
     await page.getByRole('button',{name:'Añadir gasto',exact:true}).first().click();
     const dialog=page.getByRole('dialog'); await dialog.waitFor();
     await page.getByRole('button',{name:'Guardar gasto',exact:true}).click();
     await page.getByText('Escribe un concepto.',{exact:true}).waitFor();
     assert.equal(await page.locator('#concept').getAttribute('aria-invalid'),'true');
+    await page.waitForFunction(()=>document.activeElement?.id==='concept');
     await page.getByLabel('Concepto',{exact:true}).fill(expense.concept);
     await page.getByLabel('Importe (EUR)',{exact:true}).fill(expense.amount);
     await page.getByLabel('Fecha',{exact:true}).fill(expense.date);
@@ -143,7 +172,7 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     const cid=createdCategories.find(c=>c.name==='QA · Renombrada desde panel').id;
     passed('Category panel validates empty names, creates, renames, archives and restores with persisted reload');
     await page.getByRole('button',{name:'Registro',exact:true}).click();
-    await page.locator('input[type="month"]').fill('2026-10');
+    await page.getByLabel('Mes y año',{exact:true}).fill('2026-10');
     await page.getByRole('button',{name:'Editar '+expense.concept,exact:true}).waitFor();
     assert.equal((await send(context,`categories/${cid}`,'PATCH',{name:'QA · Renombrada'},token)).status(),200);
     assert.equal((await send(context,'categories','POST',{name:'qa · renombrada'},token)).status(),409);
@@ -155,6 +184,26 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     assert.equal((await send(context,'settings','PATCH',{currency:'USD'},token)).status(),409);
     assert.equal((await send(simultaneous[1],`expenses/${eid}`)).status(),404);
     passed('Categories create, rename and archive safely; archived history, duplicate prevention, currency lock and workspace isolation hold');
+    // Use the attacking client's own valid CSRF token and configured currency.
+    const attacker=simultaneous[1], attackerWorkspace=owned[2], attackerToken=sessions[1].csrf;
+    assert.equal((await send(attacker,'settings','PATCH',{currency:'EUR'},attackerToken)).status(),200);
+    const attackerCategories=await (await send(attacker,'categories')).json();
+    const attackerExpense={...expense,concept:'QA · Espacio atacante',category_id:attackerCategories[0].id};
+    assert.equal((await send(attacker,'expenses','POST',attackerExpense,attackerToken)).status(),201);
+    const victimBefore=await snapshot(workspace), attackerBefore=await snapshot(attackerWorkspace);
+    const isolationCases=[
+      [`expenses/${eid}`,'PATCH',{...attackerExpense,amount:'99'},404],
+      [`expenses/${eid}`,'DELETE',undefined,404],
+      [`categories/${cid}`,'PATCH',{name:'QA · Intento extranjero'},404],
+      [`categories/${cid}`,'PATCH',{archived:true},404],
+      ['expenses','POST',{...attackerExpense,category_id:expense.category_id},422]
+    ];
+    for(const [resource,method,data,status]of isolationCases){
+      assert.equal((await send(attacker,resource,method,data,attackerToken)).status(),status);
+      assert.deepEqual(await snapshot(workspace),victimBefore);
+      assert.deepEqual(await snapshot(attackerWorkspace),attackerBefore);
+    }
+    passed('Own-token cross-workspace edit, delete, category rename/archive and foreign-category creation are denied with both persisted workspaces unchanged');
     // Reject mutations targeting established IDs and compare the complete persisted workspace.
     const secureSnapshot=await snapshot(workspace);
     for (const [resource,method,data] of [[`expenses/${eid}`,'PATCH',{...expense,amount:'99'}],[`expenses/${eid}`,'DELETE',undefined],[`categories/${cid}`,'PATCH',{archived:true}]]) {
@@ -177,7 +226,7 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     await page.setViewportSize({width:390,height:844});
     const breakdownButton=page.getByRole('button',{name:'Ver por categorías',exact:true});
     await breakdownButton.focus(); await page.keyboard.press('Enter'); await dialog.waitFor();
-    await dialog.getByRole('heading',{name:'Por categorías',exact:true}).waitFor();
+    await dialog.getByRole('heading',{name:'Por categorías',exact:true}).waitFor(); await assertOverlay(page);
     assert.equal(await dialog.locator('[data-breakdown-category]').count(),1);
     assert.match(await dialog.locator('[data-breakdown-category]').innerText(),/100 %/);
     assert.match(await dialog.locator('[data-breakdown-category]').innerText(),/20,01/);
@@ -201,7 +250,7 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     await page.keyboard.press('Escape'); await dialog.waitFor({state:'hidden'}); await page.waitForTimeout(50); assert(await add.evaluate(el=>el===document.activeElement));
     await page.emulateMedia({reducedMotion:'reduce'}); await add.click(); await dialog.waitFor();
     assert.equal(await dialog.evaluate(el=>getComputedStyle(el).animationName),'none'); assert.equal(await dialog.evaluate(el=>el.getAnimations().length),0);
-    if(evidenceDir)await page.screenshot({path:path.join(evidenceDir,'reduced-motion-form-mobile.png'),fullPage:true});
+    if(evidenceDir)await page.screenshot({path:path.join(evidenceDir,'reduced-motion-form-mobile.png'),fullPage:false});
     await page.keyboard.press('Escape'); await dialog.waitFor({state:'hidden'});
     passed('Panel animation is present normally and immediate with reduced motion; keyboard focus is trapped and restored');
     await page.getByRole('button',{name:'Eliminar '+expense.concept,exact:true}).click(); await page.getByRole('button',{name:'Cancelar',exact:true}).click();
@@ -211,6 +260,96 @@ exports.verify = async function verify({browser, baseUrl, evidenceDir}) {
     assert.equal((await (await send(context,'monthly?month=2026-10')).json()).total,0);
     assert.equal((await send(context,`expenses/${eid}`)).status(),404); assert.deepEqual(browserErrors,[]);
     passed('Delete confirmation cancels safely, confirmed deletion survives reload and monthly summary returns to zero');
+    // Stress records belong solely to a fresh QA workspace; preserved records are never changed.
+    const stressContext=simultaneous[2], stressToken=sessions[2].csrf;
+    assert.equal((await send(stressContext,'settings','PATCH',{currency:'EUR'},stressToken)).status(),200);
+    const longCategory='QA · '+ 'CategoríaSinEspacios'.repeat(3).slice(0,55);
+    const categoryResponse=await send(stressContext,'categories','POST',{name:longCategory},stressToken); assert.equal(categoryResponse.status(),201);
+    const longId=(await categoryResponse.json()).id;
+    const secondId=(await (await send(stressContext,'categories')).json()).find(c=>c.id!==longId).id;
+    const longConcept='QA · '+ 'ConceptoSinEspacios'.repeat(7).slice(0,115);
+    const stressRecords=[
+      {concept:longConcept,amount:'9999999999.99',date:'2026-10-31',category_id:longId,note:'QA · Prueba temporal de límites'},
+      {concept:'QA · Segunda categoría octubre',amount:'20.01',date:'2026-10-01',category_id:secondId,note:''},
+      {concept:'QA · Mes adyacente primera categoría',amount:'1.23',date:'2026-09-30',category_id:longId,note:''},
+      {concept:'QA · Mes adyacente segunda categoría',amount:'4.56',date:'2026-09-01',category_id:secondId,note:''}
+    ];
+    for(const record of stressRecords)assert.equal((await send(stressContext,'expenses','POST',record,stressToken)).status(),201);
+    for(const [month,total,values] of [['2026-10',1000000002000,[999999999999,2001]],['2026-09',579,[123,456]]]) {
+      const summary=await (await send(stressContext,'monthly?month='+month)).json();
+      assert.equal(summary.total,total); assert.equal(summary.count,2); assert.equal(summary.categories.length,2);
+      for(const [i,id]of [longId,secondId].entries()){const entry=summary.categories.find(c=>c.id===id);assert.equal(entry.total,values[i]);assert.equal(entry.count,1);}
+      const rows=await (await send(stressContext,'expenses?month='+month)).json();assert.equal(rows.length,2);assert(rows.every(r=>r.date.startsWith(month)));
+    }
+    passed('Exact two-category totals and counts in adjacent months exclude boundary dates and preserve large integer amounts');
+    const stressPage=await stressContext.newPage();
+    for(const [width,height] of [[1440,900],[1024,768],[768,1024],[390,844],[320,740]]) {
+      await stressPage.setViewportSize({width,height});await stressPage.goto(baseUrl);await stressPage.getByLabel('Mes y año',{exact:true}).fill('2026-10');
+      await stressPage.getByRole('button',{name:'Editar '+longConcept,exact:true}).waitFor();await stressPage.evaluate(()=>document.fonts.ready);
+      const assertBounds=async root=>{
+        const failures=await root.evaluate(el=>Array.from(el.querySelectorAll('li p,li span,li button,[data-breakdown-category], [data-breakdown-category] span, [data-breakdown-category] p')).filter(n=>getComputedStyle(n).display!=='none' && n.getBoundingClientRect().width>0).flatMap(n=>{
+          const r=n.getBoundingClientRect();return r.left < -1 || r.right > innerWidth+1 || n.scrollWidth>n.clientWidth+1 ? [{text:n.textContent,left:r.left,right:r.right,scroll:n.scrollWidth,client:n.clientWidth}] : [];
+        }));assert.deepEqual(failures,[]);
+        assert.equal(await stressPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+      };
+      await assertBounds(stressPage.locator('main'));
+      const total=stressPage.getByRole('region',{name:'Resumen del mes'}).locator('[data-monthly-total]');
+      const expectedTotal=new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR',currencyDisplay:'code'}).format(1000000002000/100);
+      await total.waitFor();assert.equal(await total.innerText(),expectedTotal);
+      const totalBounds=await total.evaluate(el=>{
+        const r=el.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(el);
+        const glyphs=Array.from(range.getClientRects()).map(g=>({left:g.left,right:g.right,top:g.top,bottom:g.bottom}));
+        const ancestors=[];for(let node=el;node;node=node.parentElement){const box=node.getBoundingClientRect(),style=getComputedStyle(node);ancestors.push({left:box.left,right:box.right,top:box.top,bottom:box.bottom,x:style.overflowX,y:style.overflowY});}
+        return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,glyphs,ancestors};
+      });
+      assert(totalBounds.left>=0&&totalBounds.right<=width&&totalBounds.top>=0&&totalBounds.bottom<=height,JSON.stringify(totalBounds));
+      assert(totalBounds.scrollWidth<=totalBounds.clientWidth+1&&totalBounds.scrollHeight<=totalBounds.clientHeight+1);
+      for(const g of totalBounds.glyphs){
+        assert(g.left>=totalBounds.left-1&&g.right<=totalBounds.right+1&&g.top>=totalBounds.top-1&&g.bottom<=totalBounds.bottom+1);
+        for(const a of totalBounds.ancestors){if(['hidden','clip','auto','scroll'].includes(a.x))assert(g.left>=a.left-1&&g.right<=a.right+1);if(['hidden','clip','auto','scroll'].includes(a.y))assert(g.top>=a.top-1&&g.bottom<=a.bottom+1);}
+      }
+      passed('Exact maximum monthly total is fully readable without clipping at '+width+'px');
+      if(width===320){
+        const monthLabel=stressPage.getByLabel('Mes y año',{exact:true}).locator('..');
+        assert.equal(await monthLabel.locator('[aria-hidden="true"]').innerText(),'oct 2026');
+        assert.equal(await monthLabel.locator('.sr-only').last().innerText(),'octubre de 2026');
+        const nav=await Promise.all(['Mes anterior','Mes siguiente'].map(name=>stressPage.getByRole('button',{name,exact:true}).boundingBox()));assert(nav.every(r=>r.width>=44&&r.height>=44));
+        passed('320px abbreviated month stays on one line with full accessible date and 44px navigation');
+      }
+      if(width===768){const action=await stressPage.getByRole('region',{name:'Resumen del mes'}).getByRole('button',{name:'Añadir gasto',exact:true}).boundingBox();const summary=await stressPage.getByRole('region',{name:'Resumen del mes'}).boundingBox();assert(Math.abs(action.x+action.width-summary.x-summary.width)<=1);passed('Tablet summary action aligns to the right edge');}
+      const checkBreakdown=async root=>{
+        assert.equal(await root.locator('[data-breakdown-category]').count(),2);
+        for(const [id,amount]of [[longId,999999999999],[secondId,2001]]) {
+          const formatted=new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR',currencyDisplay:'code'}).format(amount/100);
+          assert((await root.locator('[data-breakdown-category="'+id+'"]').innerText()).includes(formatted));
+        }
+      };
+      if(width>=1024)await checkBreakdown(stressPage.locator('aside'));
+      assert.equal(await stressPage.locator('#search').getAttribute('placeholder'),'Buscar');
+      assert.equal(await stressPage.locator('#category-filter option').first().textContent(),'Todas');
+      if(width===320){
+        const widths=await stressPage.evaluate(()=>{const input=document.getElementById('search'),select=document.getElementById('category-filter'),canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');ctx.font=getComputedStyle(input).font;const search=ctx.measureText(input.placeholder).width;ctx.font=getComputedStyle(select).font;return {search,searchSpace:input.clientWidth-52,category:ctx.measureText('Todas').width,categorySpace:select.clientWidth-36}});
+        assert(widths.search<=widths.searchSpace && widths.category<=widths.categorySpace,JSON.stringify(widths));
+      }
+      if(evidenceDir)await stressPage.screenshot({path:path.join(evidenceDir,'long-records-'+width+'.png'),fullPage:true});
+      if(width<1024){await stressPage.getByRole('button',{name:'Ver por categorías',exact:true}).click();await stressPage.getByRole('dialog').waitFor();await assertOverlay(stressPage);await assertBounds(stressPage.getByRole('dialog'));await checkBreakdown(stressPage.getByRole('dialog'));await stressPage.waitForTimeout(220);if(evidenceDir)await stressPage.screenshot({path:path.join(evidenceDir,'long-breakdown-'+width+'.png'),fullPage:false});await stressPage.keyboard.press('Escape');await stressPage.getByRole('dialog').waitFor({state:'hidden'});}
+      await stressPage.getByRole('button',{name:'Categorías',exact:true}).click();await stressPage.getByText(longCategory,{exact:true}).waitFor();
+      const categoryBounds=await stressPage.getByText(longCategory,{exact:true}).evaluate(el=>({right:el.getBoundingClientRect().right,overflow:el.scrollWidth>el.clientWidth+1}));assert(categoryBounds.right<=width+1 && !categoryBounds.overflow);
+      passed('Executed '+width+'px long concept/category and maximum amount bounds, full overlay and compact defaults');
+    }
+    await stressPage.setViewportSize({width:390,height:844});await stressPage.reload();await stressPage.getByRole('button',{name:'Editar '+longConcept,exact:true}).waitFor();await stressPage.getByLabel('Mes y año',{exact:true}).fill('2026-09');
+    await stressPage.getByRole('button',{name:'Editar QA · Mes adyacente primera categoría',exact:true}).waitFor();
+    assert.match(await stressPage.getByRole('region',{name:'Resumen del mes'}).innerText(),/5,79/);
+    if(evidenceDir)await stressPage.screenshot({path:path.join(evidenceDir,'adjacent-month-mobile.png'),fullPage:true});
+    passed('Adjacent-month browser navigation survives reload with exact displayed total');
+    await stressPage.reload();
+    await stressPage.getByRole('button',{name:'Editar QA · Mes adyacente primera categoría',exact:true}).waitFor();
+    await stressPage.getByRole('button',{name:'Editar QA · Mes adyacente segunda categoría',exact:true}).waitFor();
+    assert.equal(await stressPage.getByLabel('Mes y año',{exact:true}).inputValue(),'2026-09');
+    assert.equal(await stressPage.getByRole('region',{name:'Resumen del mes'}).locator('[data-monthly-total]').innerText(),new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR',currencyDisplay:'code'}).format(5.79));
+    assert.equal(await stressPage.locator('li').count(),2);
+    if(evidenceDir)await stressPage.screenshot({path:path.join(evidenceDir,'adjacent-month-after-reload.png'),fullPage:true});
+    passed('Supplemental reload after September selection retains selected month, exact 5,79 EUR total and both September records');
     const current=await snapshot();
     for(const table of Object.keys(baseline)) for(const row of baseline[table]) assert.deepEqual(current[table].find(r=>r.id===row.id),row);
     passed('All pre-existing records, including preserved QA records, remain unchanged');
